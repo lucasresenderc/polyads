@@ -1,0 +1,22 @@
+[build-system]
+requires = ["hatchling >= 1.26"]
+build-backend = "hatchling.build"
+
+[project]
+name = "polyads"
+version = "0.0.1"
+authors = [
+  { name="Lucas Resende", email="lucasresenderc@gmail.com" },
+]
+description = " A Python package for estimating multi-way gravity models with high-dimensional fixed effects. The polyad estimator addresses the incidental parameter problem in Poisson models by conditioning on sufficient statistics for fixed effects. "
+readme = "README.md"
+requires-python = ">=3.8"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Operating System :: OS Independent",
+]
+license = "MIT"
+license-files = ["LICENSE*"]
+
+[project.urls]
+Homepage = "https://lucasresenderc.github.io/"
