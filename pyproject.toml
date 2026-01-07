@@ -15,8 +15,10 @@ classifiers = [
     "Programming Language :: Python :: 3",
     "Operating System :: OS Independent",
 ]
-license = "MIT"
-license-files = ["LICENSE*"]
+license = { file = "LICENSE" }
 
 [project.urls]
 Homepage = "https://lucasresenderc.github.io/"
+
+[tool.setuptools]
+license-files = []
