@@ -46,6 +46,10 @@ estimator.fit(
 estimator.summary()
 ```
 
+## An easy example in Colab
+
+[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/lecueguillaume/polyads/blob/main/polads_tutorial.ipynb)
+
 ## The Method
 
 ### Multi-Way Gravity Model
