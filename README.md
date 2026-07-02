@@ -250,7 +250,6 @@ print(f"Active polyads: {estimator.n_polyads_}")
 | `tests/gmm_example.py` | Jochmans panel, GMM unleveled and leveled |
 | `tests/polyad_dgp_monte_carlo.py` | Monte Carlo comparison of all loss families |
 | `tests/jochmans_table1_replication.py` | GMM replication over Jochmans designs |
-| `paper/replication_benchmark.py` | Poisson and Bernoulli timing benchmark |
 
 ## Limitations
 
