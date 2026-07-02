@@ -1,6 +1,6 @@
 import numpy as np
 from numba import jit
-from .losses import _compute_polyad_loss
+from .losses import _compute_polyad_loss, _compute_polyad_gmm_moment
 from .polyad_utils import _generate_polyad_sign_patterns
 
 
@@ -13,42 +13,52 @@ def _compute_polyad_features(
     kwargs: dict = None
 ) -> np.ndarray:
     """
-    Build feature matrix for all polyads.
+    Build the antisymmetric feature matrix X_xis = S_plus - S_minus.
+    """
+    S_plus, S_minus = _compute_polyad_features_gmm(D, p, xis, X, args=args, kwargs=kwargs)
+    return S_plus - S_minus
 
-    Parameters
-    ----------
-    xis : np.ndarray
-        Array of polyad indices (shape: [n_polyads, D, 2]).
-    p : int
-        Number of features per polyad.
-    X : callable
-        Feature function.
-    args : tuple, optional
-        Positional arguments for X (default: ()).
-    kwargs : dict, optional
-        Keyword arguments for X (default: {}).
+
+def _compute_polyad_features_gmm(
+    D: int,
+    p: int,
+    xis: np.ndarray,
+    X,
+    args: tuple = None,
+    kwargs: dict = None
+) -> tuple:
+    """
+    Build the sign-summed feature matrices for the GMM moment.
+
+    S_plus collects the features of the positive-sign configurations and
+    S_minus those of the negative-sign configurations. The antisymmetric
+    instrument is X_xis = S_plus - S_minus.
 
     Returns
     -------
-    np.ndarray
-        Feature matrix for all polyads (shape: [n_polyads, p]).
+    tuple
+        (S_plus, S_minus), each of shape [n_polyads, p].
     """
     if args is None:
         args = ()
     if kwargs is None:
         kwargs = {}
     num_polyads = xis.shape[0]
-    X_xis = np.empty((num_polyads, p), dtype=np.float32)
+    S_plus = np.zeros((num_polyads, p), dtype=np.float32)
+    S_minus = np.zeros((num_polyads, p), dtype=np.float32)
     grid, signs = _generate_polyad_sign_patterns(D)
     key = np.empty(D, dtype=np.int32)
     power_D = 2 ** D
     for i_polyad, polyad_index in enumerate(xis):
-        X_xis[i_polyad] = X( polyad_index[:,0] , *args, **kwargs).copy()
-        for i in range(1, power_D):
+        for i in range(power_D):
             for d in range(D):
                 key[d] = polyad_index[d][grid[i][d]]
-            X_xis[i_polyad] += X( key, *args, **kwargs) * signs[i]
-    return X_xis
+            X_config = np.asarray(X(key, *args, **kwargs), dtype=np.float32)
+            if signs[i] > 0:
+                S_plus[i_polyad] += X_config
+            else:
+                S_minus[i_polyad] += X_config
+    return S_plus, S_minus
 
 
 @jit(nopython=True)
@@ -79,7 +89,7 @@ def _evaluate_polyad_losses(
     beta : np.ndarray
         Parameter vector.
     loss : str
-        Loss function name. Supported: 'poisson_binary', 'poisson_multiclass', 'poisson_binary_balanced'
+        Loss function name. Supported: 'multiclass', 'binary', 'binary_balanced'
 
     Returns
     -------
@@ -99,6 +109,61 @@ def _evaluate_polyad_losses(
         expectations[i] = expectation
         variances[i] = variance
     return log_likelihoods, expectations, variances
+
+
+@jit(nopython=True)
+def _evaluate_polyad_gmm(
+    D: int,
+    Y_xis: np.ndarray,
+    S_plus: np.ndarray,
+    S_minus: np.ndarray,
+    X_xis: np.ndarray,
+    M_xis: np.ndarray,
+    beta: np.ndarray,
+    leveled: bool,
+) -> tuple:
+    """
+    Evaluate the aggregated GMM moment vector and its Jacobian at beta.
+
+    s(beta) = mean_i X_xis[i] * g_i(beta)            (p-vector)
+    G(beta) = mean_i outer(X_xis[i], dg_i(beta))     (p x p Jacobian)
+
+    Returns
+    -------
+    tuple
+        (s, G, g_is) where g_is holds the per-polyad scalar moment (used by
+        the variance computation).
+    """
+    num_polyads = M_xis.size
+    p = beta.size
+    _, signs = _generate_polyad_sign_patterns(D)
+    power_D = 2 ** D
+
+    s = np.zeros(p)
+    G = np.zeros((p, p))
+    g_is = np.empty(num_polyads)
+
+    for i in range(num_polyads):
+        has_B = M_xis[i] != 0
+        logA = 0.0
+        logB = 0.0
+        for c in range(power_D):
+            if signs[c] > 0:
+                logA += np.log(Y_xis[i, c])
+            elif has_B:
+                logB += np.log(Y_xis[i, c])
+
+        g, dg = _compute_polyad_gmm_moment(
+            logA, logB, has_B, S_plus[i], S_minus[i], beta, leveled
+        )
+        g_is[i] = g
+
+        pw = i / (i + 1)
+        cw = 1 / (i + 1)
+        s = s * pw + X_xis[i] * g * cw
+        G = G * pw + (X_xis[i][:, None] * dg[None, :]) * cw
+
+    return s, G, g_is
 
 
 @jit(nopython=True)

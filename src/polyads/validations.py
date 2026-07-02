@@ -1,11 +1,15 @@
 import numpy as np
 import pandas as pd
+from .losses import SUPPORTED_LOSSES, resolve_loss
 
-def _validate_fit_inputs(df, beta_init, eval_X, X, loss, supported_losses, index_columns, value_column):
+
+def _validate_fit_inputs(df, beta_init, eval_X, X, loss, index_columns, value_column):
     """
     Validate inputs for PolyadEstimator.fit.
     Raises ValueError or TypeError with clear messages if invalid.
     """
+    cfg = resolve_loss(loss)
+
     # DataFrame check
     if not isinstance(df, pd.DataFrame):
         raise TypeError("df must be a pandas DataFrame.")
@@ -20,7 +24,7 @@ def _validate_fit_inputs(df, beta_init, eval_X, X, loss, supported_losses, index
         raise ValueError(f"value_column '{value_column}' is not in DataFrame columns {list(df.columns)}.")
     if value_column in index_columns:
         raise ValueError("value_column cannot be one of the index_columns.")
-    
+
     # Keep only relevant columns
     df = df[list(index_columns) + [value_column]].copy()
 
@@ -29,20 +33,27 @@ def _validate_fit_inputs(df, beta_init, eval_X, X, loss, supported_losses, index
         raise ValueError("df contains NaN values.")
     if not np.isfinite(df.values).all():
         raise ValueError("df contains infinite values.")
-    if (df.values < 0).any():
+    if (df[value_column] < 0).any():
         raise ValueError("df contains negative values.")
-    
-    # Only keep rows with nonzero values in the last column
-    last_col = df.columns[-1]
-    df = df[df[last_col] != 0].copy()
-    # Accept both int and float types, but all values must be integer-valued
-    if not np.all(np.equal(np.mod(df.values, 1), 0)):
-        raise ValueError("df contains non-integer values.")
-    # Cast to int32
-    df = df.astype(np.int32)
+
+    values = df[value_column].values
+
+    if cfg["family"] == "qmle" and cfg["extensive_margin"]:
+        if not np.all(np.equal(np.mod(values, 1), 0)):
+            raise ValueError("bernoulli loss requires integer-valued outcomes.")
+        if (values > 1).any():
+            raise ValueError("bernoulli loss requires outcomes in {0, 1}.")
+    elif cfg["dtype"] == np.int32:
+        if not np.all(np.equal(np.mod(values, 1), 0)):
+            raise ValueError("df contains non-integer values.")
+    elif cfg["family"] == "gmm":
+        pass
+
+    # Only keep rows with nonzero values in the value column
+    df = df[df[value_column] != 0].copy()
+    df[value_column] = df[value_column].astype(cfg["dtype"])
 
     # beta_init check
-    # Accept scalar, list, or array; always convert to 1D np.ndarray of dtype float32
     if np.isscalar(beta_init):
         beta_init = np.array([beta_init], dtype=np.float32)
     elif isinstance(beta_init, list):
@@ -65,9 +76,7 @@ def _validate_fit_inputs(df, beta_init, eval_X, X, loss, supported_losses, index
     if eval_X is not None and not callable(eval_X):
         raise TypeError("eval_X must be callable if provided.")
 
-    # loss check
-    if loss not in supported_losses:
-        raise ValueError(f"loss must be one of {supported_losses}, got '{loss}'")
+    if loss not in SUPPORTED_LOSSES:
+        raise ValueError(f"loss must be one of {SUPPORTED_LOSSES}, got '{loss}'")
 
-    # Passed all checks
     return df, beta_init

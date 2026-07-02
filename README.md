@@ -1,130 +1,173 @@
 # Polyads: Statistical Inference in Large Multi-way Networks
 
-A Python package for estimating multi-way gravity models with high-dimensional fixed effects. The polyad estimator addresses the incidental parameter problem in Poisson models by conditioning on sufficient statistics for fixed effects.
+A Python package for estimating multi-way gravity models with high-dimensional fixed effects. The polyad estimator addresses the incidental parameter problem by conditioning on sufficient statistics for fixed effects. The same computational core also supports an extensive-margin estimator for binary edges and GMM estimators for multiplicative-error models with non-integer outcomes.
 
 ## Overview
 
-Traditional PPML estimators may suffer from the incidental parameter problem when the number of fixed effects grows with sample size. This package implements a conditional likelihood approach that eliminates fixed effects from the estimation problem entirely.
+Traditional PPML estimators may suffer from the incidental parameter problem when the number of fixed effects grows with sample size. This package implements estimators that difference out fixed effects through polyad-level contrasts, selected with a single `loss` argument.
 
-**Key Features:**
-- Handles arbitrary fixed effects structures (two-way, three-way, four-way, etc.)
+**Key features:**
+- Conditional likelihood (PPML-style) for count data
+- Extensive-margin conditional logit for binary outcomes (`loss="bernoulli"`)
+- GMM for multiplicative-error models with any non-negative outcome (`gmm_unleveled`, `gmm_leveled`)
+- Arbitrary fixed-effect structures (two-way, three-way, four-way, …)
 - Computationally efficient for sparse network data
-- Provides asymptotically valid inference
+- Asymptotically valid inference via Hájek-projection sandwich variances
 
+## Estimator families
 
-## Quick Start
+All estimators share polyad enumeration, Newton optimization, and variance computation. The `loss` argument selects the objective and the data rules:
+
+| `loss` | Data | Description |
+|--------|------|-------------|
+| `poisson_multiclass` | non-negative integers | Full conditional logit over the polyad orbit (default) |
+| `poisson_binary` | non-negative integers | Binary split of the orbit at its midpoint |
+| `poisson_binary_balanced` | non-negative integers | Binary split balancing probability mass |
+| `bernoulli` | binary `{0, 1}` | Extensive-margin polyad rules + conditional logit |
+| `gmm_unleveled` | non-negative (float OK) | GMM moment, unleveled bracket |
+| `gmm_leveled` | non-negative (float OK) | GMM moment, leveled bracket (better with non-negative covariates) |
+
+Supported values are exported as `SUPPORTED_LOSSES` from `polyads`.
+
+## Quick start (Poisson counts)
 
 ```python
 import numpy as np
-import pandas as pd
 from src.polyads.data import generate_data
 from src.polyads.model import PolyadEstimator
 
-# Generate synthetic three-way gravity data
-beta_true = np.array([1.0, -0.5])
+beta_true = np.array([1.0, -0.5], dtype=np.float32)
 df, X = generate_data(
     seed=1,
-    n_ds=(100, 100, 100),        # Dimensions: n1 × n2 × n3
-    c=-5,                         # Baseline intensity
-    shape=np.inf,                 # Poisson model
-    beta=beta_true,               
-    groups=[[0,1], [0,2], [1,2]] # Three-way fixed effects
+    n_ds=(100, 100, 100),
+    c=-5,
+    shape=np.inf,
+    beta=beta_true,
+    groups=[[0, 1], [0, 2], [1, 2]],
 )
 
-# Fit the model
 columns = df.columns.tolist()
-estimator = PolyadEstimator(use_tqdm=True)
-estimator.fit(
-    df=df, 
-    indices=columns[:-1],         # Index columns
-    values=columns[-1],           # Count column
-    beta_init=np.zeros(2),
-    X=X
-)
-
-# Display results
+estimator = PolyadEstimator(use_tqdm=True)  # loss="poisson_multiclass" by default
+estimator.fit(df, columns[:-1], columns[-1], np.zeros(2), X=X)
 estimator.summary()
 ```
 
-## The Method
+## Bernoulli (extensive margin)
 
-### Multi-Way Gravity Model
+For binary outcomes, use `y_mode="bernoulli"` in the data generator and `loss="bernoulli"` in the estimator. Polyad enumeration uses extensive-margin activity rules; the conditional logit objective is unchanged.
 
-Consider count data indexed by D dimensions:
+```python
+df, X = generate_data(
+    seed=1,
+    n_ds=(40, 40, 40),
+    c=-2,
+    shape=np.inf,
+    beta=beta_true,
+    groups=[[0, 1], [0, 2], [1, 2]],
+    y_mode="bernoulli",
+)
+
+estimator = PolyadEstimator(loss="bernoulli", use_tqdm=True)
+estimator.fit(df, columns[:-1], columns[-1], np.zeros(2), X=X)
+estimator.summary()
+```
+
+## GMM (multiplicative-error models)
+
+GMM losses require only conditional-mean assumptions (no Poisson distribution). Outcomes may be non-integer. For a two-way gravity panel, use `generate_jochmans_panel`:
+
+```python
+from src.polyads.data import generate_jochmans_panel
+from src.polyads.model import PolyadEstimator
+
+df, X = generate_jochmans_panel(
+    seed=1, design=1, n=50, m=50, prob_non_zero=0.05,
+)
+columns = df.columns.tolist()
+
+estimator = PolyadEstimator(loss="gmm_leveled", use_tqdm=True)
+estimator.fit(
+    df, columns[:-1], columns[-1],
+    np.array([0.0], dtype=np.float32), X=X,
+)
+estimator.summary()
+```
+
+Use `gmm_unleveled` for the raw moment bracket and `gmm_leveled` when covariates are non-negative.
+
+## The method
+
+### Multi-way gravity model
+
+Count data are modeled as
 
 ```
-log λ_{i₁,...,iD} = β'X_{i₁,...,iD} + Σ_g θ^g_{g(i)}
+log λ_{i₁,…,iD} = β′X_{i₁,…,iD} + Σ_g θ^g_{g(i)}
 ```
 
-where β are structural parameters and θ^g are fixed effects.
+GMM targets the multiplicative model `Y_i = exp(β′X_i) × (fixed effects) × ε_i` with `E[ε_i | X] = 1`, without specifying a Poisson distribution.
 
-### The Incidental Parameter Problem
+### The incidental parameter problem
 
 When the number of fixed effects grows with sample size:
-- **Two-way models (D=2)**: PPML is consistent
-- **Three-way models (D=3+)**: PPML yields unreliable confidence intervals.
+- **Two-way models (D = 2):** PPML is consistent
+- **Three-way models (D ≥ 3):** PPML can yield biased estimates and unreliable confidence intervals
 
-### The Polyad Solution
+Polyad conditional likelihood and GMM estimators difference out fixed effects and avoid this problem by construction.
 
-The method conditions on node degrees (sufficient statistics for fixed effects) and maximizes a conditional likelihood that depends only on β. This eliminates the incidental parameter problem by removing fixed effects from the objective function.
+### The polyad solution
 
-## Basic Usage
+The method builds contrasts over structured subsets of edges (polyads). For count data it conditions on polyad-level orbits and maximizes a conditional logit that depends only on β. For GMM it uses product-moment conditions that cancel fixed effects algebraically. Both approaches enumerate active polyads over pairs of realized edges, giving `O(|E|²)` cost when the network is sparse.
 
-### Model Setup
+## Basic usage
+
+### Model setup
 
 ```python
 from src.polyads.model import PolyadEstimator
 
 estimator = PolyadEstimator(
-    max_iter=100,                 # Maximum iterations
-    tol=1e-4,                     # Convergence tolerance
-    max_n_polyads=int(1e8),      # Max polyads to process
-    use_tqdm=False                # Progress bar
+    loss="poisson_multiclass",    # see table above
+    max_iter=100,
+    tol=1e-4,
+    max_n_polyads=int(1e8),
+    variance_threshold=0.0,       # 0 = exact pairwise variance; 1 = fast approximation
+    use_tqdm=False,
 )
 ```
 
-### Two-Way Example (Trade)
+You can override `loss` per fit: `estimator.fit(..., loss="gmm_leveled")`.
+
+### Two-way example (trade)
 
 ```python
-# Bilateral trade: log λ_ij = β'X_ij + u_i + v_j
-df = pd.DataFrame({
-    'exporter': [...],
-    'importer': [...],
-    'flow': [...]
-})
-
+# Bilateral trade: log λ_ij = β′X_ij + u_i + v_j
+estimator = PolyadEstimator(loss="poisson_multiclass")
 estimator.fit(
     df=df,
-    indices=['exporter', 'importer'],
-    values='flow',
+    indices=["exporter", "importer"],
+    values="flow",
     beta_init=np.zeros(p),
-    X=features
+    X=features,
 )
 ```
 
-### Three-Way Example (Panel)
+### Three-way example (panel)
 
 ```python
-# Trade panel: log λ_ijt = β'X_ijt + u_ij + v_it + w_jt
-df = pd.DataFrame({
-    'exporter': [...],
-    'importer': [...],
-    'year': [...],
-    'flow': [...]
-})
-
+# Trade panel: log λ_ijt = β′X_ijt + u_ij + v_it + w_jt
 estimator.fit(
     df=df,
-    indices=['exporter', 'importer', 'year'],
-    values='flow',
+    indices=["exporter", "importer", "year"],
+    values="flow",
     beta_init=np.zeros(p),
-    X=features
+    X=features,
 )
 ```
 
-## Advanced Features
+## Advanced features
 
-### Custom Feature Function
+### Custom feature function
 
 Compute features on-the-fly to save memory:
 
@@ -134,121 +177,99 @@ def compute_features(indices):
     return np.array([
         np.log(distance[i, j]),
         fta_indicator[i, j, t],
-        border[i, j]
+        border[i, j],
     ])
 
 estimator.fit(
     df=df,
-    indices=['i', 'j', 't'],
-    values='y',
+    indices=["i", "j", "t"],
+    values="y",
     beta_init=np.zeros(3),
-    eval_X=compute_features
+    eval_X=compute_features,
 )
 ```
 
-### Results and Inference
+### Results and inference
 
 ```python
-# Point estimates
 beta_hat = estimator.beta_
-
-# Standard errors
 se = np.sqrt(np.diag(estimator.var_))
+estimator.summary(alpha=0.05)
 
-# Confidence intervals
-estimator.summary(alpha=0.05)  # 95% CI
-
-# Diagnostics
 print(f"Converged: {estimator.converged_}")
 print(f"Iterations: {estimator.iterations_}")
 print(f"Active polyads: {estimator.n_polyads_}")
 ```
 
-## Data Format
+## Data format
 
-### Input DataFrame
+Supply a long-format `pandas.DataFrame` with index columns and one value column. Rows with zero outcomes may be omitted (they are dropped internally).
 
-```python
-df = pd.DataFrame({
-    'i1': [0, 0, 1, ...],  # First dimension
-    'i2': [0, 1, 0, ...],  # Second dimension
-    'i3': [0, 0, 1, ...],  # Third dimension (if 3-way)
-    'y': [5, 0, 3, ...]    # Non-negative counts
-})
-```
+Validation depends on `loss`:
 
-### Feature Matrix
+| Loss family | Value column |
+|-------------|--------------|
+| `poisson_*` | non-negative integers |
+| `bernoulli` | integers in `{0, 1}` (before zero-drop) |
+| `gmm_*` | finite non-negative values (float allowed) |
 
-```python
-# 2-way: (n1, n2, p)
-# 3-way: (n1, n2, n3, p)
-# 4-way: (n1, n2, n3, n4, p)
-X = np.random.randn(n1, n2, n3, p)
-```
-
-Or custom feature function, as described.
+Feature array shape: `(n₁, …, nD, p)`, or pass a callable `eval_X(key)` instead of materializing the full tensor.
 
 ## Diagnostics
 
-### Check Convergence
-
 ```python
 if not estimator.converged_:
-    print("Warning: Did not converge")
-    
+    print("Warning: did not converge")
+
 if estimator.det_ < 1e-8:
-    print("Singular Hessian - possible collinearity")
-    estimator.summary()  # Shows eigenstructure
-```
+    print("Singular Hessian — possible collinearity")
+    estimator.summary()  # shows eigenstructure
 
-### Common Issues
-
-**No polyads found:** Data too sparse or no variation
-```python
 print(f"Positive edges: {estimator.n_edges_}")
 print(f"Active polyads: {estimator.n_polyads_}")
 ```
 
-**Singular Hessian:** Collinear features or absorbed by fixed effects
-```python
-# Check correlation
-import pandas as pd
-pd.DataFrame(X.reshape(-1, p)).corr()
-```
+**No polyads found:** data too sparse or no variation within polyads.
 
-## Comparison with PPML
+**Singular Hessian:** collinear features or variation absorbed by fixed effects.
 
-| Method | Best For | Pros | Cons |
-|--------|----------|------|------|
-| **Polyads** | D≥3, sparse | No bias, valid inference | Slower for dense data |
-| **PPML** | D=2, dense | Fast, familiar | IPP for D≥3 |
+## Best practices
 
+1. **Pick the right `loss`** for your outcome type (counts, binary, or general non-negative).
+2. **Check sparsity:** this package is useful when \|E\| ≪ n.
+3. **Scale features** for numerical stability, especially with GMM.
+4. **Warm up:** run a small fit first (`max_n_polyads=10`) to compile Numba kernels.
+5. **Validate:** check convergence, Hessian determinant, and `n_polyads_`.
 
-## Best Practices
+## Examples
 
-1. **Start simple:** Fewer features initially
-2. **Check sparsity:** Method works best when |E| ≪ n
-3. **Scale features:** Normalize for numerical stability
-4. **Warm-up:** Use small problem first for JIT compilation
-5. **Validate:** Check convergence and Hessian determinant
+| Script | Content |
+|--------|---------|
+| `tests/basic_usage.py` | Three-way Poisson DGP |
+| `tests/extensive_margin_example.py` | Bernoulli network |
+| `tests/gmm_example.py` | Jochmans panel, GMM unleveled and leveled |
+| `tests/polyad_dgp_monte_carlo.py` | Monte Carlo comparison of all loss families |
+| `tests/jochmans_table1_replication.py` | GMM replication over Jochmans designs |
+| `paper/replication_benchmark.py` | Poisson and Bernoulli timing benchmark |
 
 ## Limitations
 
 - Assumes conditional independence given fixed effects and covariates
-- Designed for count data (not continuous)
+- Conditional logit losses require integer count or binary data as appropriate
+- GMM is not convex and sensitive to the initial parameter
 - Slower than PPML for very dense networks
-- Requires sufficient within-group variation
+- Requires sufficient within-group variation for identification
 
 ## Citation
 
 ```bibtex
 @misc{resende2025polyads,
-      title={Statistical Inference in Large Multi-way Networks}, 
-      author={Lucas Resende and Guillaume Lecué and Lionel Wilner and Philippe Choné},
+      title={Statistical Inference in Large Multi-way Networks},
+      author={Lucas Resende and Guillaume Lecu{\'e} and Lionel Wilner and Philippe Chon{\'e}},
       year={2025},
       eprint={2512.02203},
       archivePrefix={arXiv},
       primaryClass={econ.EM},
-      url={https://arxiv.org/abs/2512.02203}, 
+      url={https://arxiv.org/abs/2512.02203},
 }
 ```

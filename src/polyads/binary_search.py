@@ -17,8 +17,8 @@ def _binary_search_edge_value(keys, values, query):
 
     Returns
     -------
-    int
-        Value associated with query key, or 0 if not found.
+    scalar
+        Value associated with query key, or zero of the same dtype if not found.
     """
     lo = 0
     hi, D = keys.shape
@@ -53,4 +53,6 @@ def _binary_search_edge_value(keys, values, query):
 
         hi = mid - 1
 
-    return 0
+    z = np.empty((), dtype=values.dtype)
+    z[()] = 0
+    return z[()]

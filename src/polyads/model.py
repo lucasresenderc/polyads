@@ -16,7 +16,7 @@ class PolyadEstimator:
         loss: str = "poisson_multiclass",
         max_n_polyads: int = int(1e8),
         variance_threshold: float = 0.0,
-        use_tqdm: bool = False
+        use_tqdm: bool = False,
     ) -> None:
         """
         Initialize a PolyadEstimator instance.
@@ -28,9 +28,10 @@ class PolyadEstimator:
         tol : float, optional
             Convergence tolerance for the optimization (default: 1e-4).
         max_step : float, optional
-            Maximum step size for parameter updates (default: 0.5).
+            Maximum step size for parameter updates (default: 1.0).
         loss : str, optional
-            Loss function name. Supported: 'poisson_binary', 'poisson_multiclass'.
+            Loss function name. Supported: 'poisson_binary', 'poisson_multiclass',
+            'poisson_binary_balanced', 'bernoulli', 'gmm_unleveled', 'gmm_leveled'.
             (default: 'poisson_multiclass')
         max_n_polyads : int, optional
             Maximum number of polyads to generate/use (default: 1e7).
@@ -64,8 +65,7 @@ class PolyadEstimator:
         self.time_ = None
 
     def _validate_input(self, df, beta_init, eval_X, X, loss, indices, values):
-        supported_losses = ["poisson_binary", "poisson_multiclass", "poisson_binary_balanced"]
-        return _validate_fit_inputs(df, beta_init, eval_X, X, loss, supported_losses, indices, values)
+        return _validate_fit_inputs(df, beta_init, eval_X, X, loss, indices, values)
 
     @staticmethod
     def default_eval_X(matrix: np.ndarray) -> 'callable':
@@ -118,10 +118,8 @@ class PolyadEstimator:
             else:
                 raise ValueError("You must provide either eval_X or X (matrix)!")
 
-        # Allow override of loss for this fit, else use self.loss
         loss_name = loss if loss is not None else self.loss
 
-        # Validate all inputs before fitting
         df, beta_init = self._validate_input(df, beta_init, eval_X, X, loss_name, indices, values)
 
         result = _fit_polyad_estimator(
@@ -135,7 +133,7 @@ class PolyadEstimator:
             use_tqdm=self.use_tqdm,
             loss=loss_name,
             max_n_polyads=self.max_n_polyads,
-            variance_threshold=self.variance_threshold
+            variance_threshold=self.variance_threshold,
         )
         self.beta_ = result['beta']
         self.n_edges_ = result['n_edges']
@@ -189,7 +187,6 @@ class PolyadEstimator:
             if self.n_polyads_ == self.max_n_polyads:
                 print("(Maximum number of polyads reached. Results may be unreliable.)")
 
-            # Provide statistics when the model reaches a singular Hessian
             if self.det_ <= 1e-8 and self.n_polyads_ > 0:
                 print("="*65)
                 print(df)
@@ -213,5 +210,3 @@ class PolyadEstimator:
                 print(f"Number of Pairs of Active Polyads Sharing Edges: {self.n_pairs_}")
                 print("="*65)
                 print(df)
-
-

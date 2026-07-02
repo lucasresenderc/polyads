@@ -6,22 +6,21 @@ from .polyad_utils import _generate_polyad_sign_patterns
 
 @jit(nopython=True)
 def _get_minima(
-        D, power_D, grid, signs, key, Y_xi, # precomputed or prealocated
-        keys_p, # i = [i_1, keys_p]
-        keys_q, # i' = [i_1p, keys_q]
-        value_p, # Y[i_1, keys_p]
-        value_q, # Y[i_1, keys_q] if D is odd else Y[i_1p, keys_q]
-        edge_indices_i_1, # edge_indices[i_1]
-        edge_indices_i_1p, # edge_indices[i_1p]
-        edge_values_i_1, # edge_values[i_1]
-        edge_values_i_1p # edge_values[i_1p]
-    ) -> int:
+        D, power_D, grid, signs, key, Y_xi,
+        keys_p,
+        keys_q,
+        value_p,
+        value_q,
+        edge_indices_i_1,
+        edge_indices_i_1p,
+        edge_values_i_1,
+        edge_values_i_1p,
+        extensive_margin,
+    ) -> tuple:
 
-    m_xi = min(value_p, value_q) # init m_xi
-    # go on the edges that start with 1 and are positive:
+    m_xi = min(value_p, value_q)
     for i in range(power_D//2, power_D):
         if signs[i] == 1:
-            # fill the 1->1..1 in the even case
             if (D%2 == 0 and i == power_D-1):
                 Y_xi[i] = value_q
             else:
@@ -29,14 +28,11 @@ def _get_minima(
                     key[d] = keys_p[d] if grid[i][d+1] == 0 else keys_q[d]
                 Y_xi[i] = _binary_search_edge_value(edge_indices_i_1p, edge_values_i_1p, key)
                 if Y_xi[i] == 0:
-                    return 0, 0
-                else:
-                    m_xi = min(m_xi, Y_xi[i])
+                    return 0.0, 0.0
+                m_xi = min(m_xi, Y_xi[i])
 
-    # go on the edges that start with 0 and are positive (ignore the first one that is always known):
     for i in range(1, power_D//2):
         if signs[i] == 1:
-            # fill the 0->1..1 in the odd case
             if (D%2 == 1 and i == power_D//2-1):
                 Y_xi[i] = value_q
             else:
@@ -44,28 +40,45 @@ def _get_minima(
                     key[d] = keys_p[d] if grid[i][d+1] == 0 else keys_q[d]
                 Y_xi[i] = _binary_search_edge_value(edge_indices_i_1, edge_values_i_1, key)
                 if Y_xi[i] == 0:
-                    return 0, 0
-                else:
-                    m_xi = min(m_xi, Y_xi[i])
+                    return 0.0, 0.0
+                m_xi = min(m_xi, Y_xi[i])
 
-    Y_xi[0] = value_p # always known
+    Y_xi[0] = value_p
 
-    M_xi = -1
-    # go on the edges that start with 0 and are negative (the first is always postive, we skip it):
-    for i in range(1, power_D//2):
-        if signs[i] == -1:
-            for d in range(D-1):
-                key[d] = keys_p[d] if grid[i][d+1] == 0 else keys_q[d]
-            Y_xi[i] = _binary_search_edge_value(edge_indices_i_1, edge_values_i_1, key)
-            M_xi = min(M_xi, Y_xi[i]) if M_xi != -1 else Y_xi[i]
+    if extensive_margin:
+        M_xi = 0.0
+        for i in range(1, power_D//2):
+            if signs[i] == -1:
+                for d in range(D-1):
+                    key[d] = keys_p[d] if grid[i][d+1] == 0 else keys_q[d]
+                Y_xi[i] = _binary_search_edge_value(edge_indices_i_1, edge_values_i_1, key)
+                M_xi = max(M_xi, Y_xi[i])
+                if M_xi > 0:
+                    return m_xi, M_xi
 
-    # go on the edges that start with 1 and are negative:
-    for i in range(power_D//2, power_D):
-        if signs[i] == -1:
-            for d in range(D-1):
-                key[d] = keys_p[d] if grid[i][d+1] == 0 else keys_q[d]
-            Y_xi[i] = _binary_search_edge_value(edge_indices_i_1p, edge_values_i_1p, key)
-            M_xi = min(M_xi, Y_xi[i])
+        for i in range(power_D//2, power_D):
+            if signs[i] == -1:
+                for d in range(D-1):
+                    key[d] = keys_p[d] if grid[i][d+1] == 0 else keys_q[d]
+                Y_xi[i] = _binary_search_edge_value(edge_indices_i_1p, edge_values_i_1p, key)
+                M_xi = max(M_xi, Y_xi[i])
+                if M_xi > 0:
+                    return m_xi, M_xi
+    else:
+        M_xi = -1.0
+        for i in range(1, power_D//2):
+            if signs[i] == -1:
+                for d in range(D-1):
+                    key[d] = keys_p[d] if grid[i][d+1] == 0 else keys_q[d]
+                Y_xi[i] = _binary_search_edge_value(edge_indices_i_1, edge_values_i_1, key)
+                M_xi = min(M_xi, Y_xi[i]) if M_xi != -1.0 else Y_xi[i]
+
+        for i in range(power_D//2, power_D):
+            if signs[i] == -1:
+                for d in range(D-1):
+                    key[d] = keys_p[d] if grid[i][d+1] == 0 else keys_q[d]
+                Y_xi[i] = _binary_search_edge_value(edge_indices_i_1p, edge_values_i_1p, key)
+                M_xi = min(M_xi, Y_xi[i])
 
     return m_xi, M_xi
 
@@ -76,39 +89,21 @@ def _find_active_polyads(
     primary_indices: np.ndarray,
     edge_indices: np.ndarray,
     edge_values: np.ndarray,
-    max_n_polyads: int
+    max_n_polyads: int,
+    extensive_margin: bool = False,
 ) -> tuple:
     """
     Generate all active polyads for the model.
-
-    Parameters
-    ----------
-    D : int
-        Index dimensions.
-    primary_indices : np.ndarray
-        Array of primary node indices.
-    edge_indices : np.ndarray
-        List of arrays of edge keys for each node, list of n x (D-1) indices
-    edge_values : np.ndarray
-        List of arrays of edge values for each node.
-    max_n_polyads : int
-        Maximum number of polyads to generate.
-
-    Returns
-    -------
-    tuple
-        (xis, Y_xis, m_xis, M_xis)
-        where each is a np.ndarray with shape depending on the number of polyads found.
     """
     power_D = 2**D
     n_1 = primary_indices.size
     grid, signs = _generate_polyad_sign_patterns(D)
     key = np.empty(D-1, dtype=np.int32)
-    Y_xi = np.empty(signs.size,  dtype=np.int32)  # TODO: document
-    xis = np.empty((int(max_n_polyads), D, 2), dtype=np.int32)  # TODO: document
-    Y_xis = np.empty((int(max_n_polyads), signs.size), dtype=np.int32)  # TODO: document
-    m_xis = np.empty(int(max_n_polyads), dtype=np.int32)  # TODO: document
-    M_xis = np.empty(int(max_n_polyads), dtype=np.int32)  # TODO: document
+    Y_xi = np.empty(signs.size, dtype=np.float64)
+    xis = np.empty((int(max_n_polyads), D, 2), dtype=np.int32)
+    Y_xis = np.empty((int(max_n_polyads), signs.size), dtype=np.float64)
+    m_xis = np.empty(int(max_n_polyads), dtype=np.float64)
+    M_xis = np.empty(int(max_n_polyads), dtype=np.float64)
 
     i_current_polyad = 0
     for i_1 in range(n_1):
@@ -127,27 +122,27 @@ def _find_active_polyads(
                             keys_q = edge_indices[i_1p][q]
                             value_q = edge_values[i_1p][q]
 
-                        # avoid duplicate polyads by ordering i_2,...,i_D
-                        # i.e., only keep polyads where keys_p < keys_q lexicographically
                         ordered_tetrad = np.all(keys_p < keys_q)
-                        if ordered_tetrad:                           
-                            # check and gather the values of the edges
-                            # notice that we already know the values of 0->0..0 and 0->1..1 if D is odd
-                            # and the values of 0->0..0 and 1->1..1 if D is even
+                        if ordered_tetrad:
                             m_xi, M_xi = _get_minima(
                                 D, power_D, grid, signs, key, Y_xi,
-                                keys_p, # i = [i_1, keys_p]
-                                keys_q, # i' = [i_1p, keys_q]
-                                value_p, # Y[i_1, keys_p]
-                                value_q, # Y[i_1, keys_q] if D is odd else Y[i_1p, keys_q]
-                                edge_indices[i_1], # edge_indices[i_1]
-                                edge_indices[i_1p], # edge_indices[i_1p]
-                                edge_values[i_1], # edge_values[i_1]
-                                edge_values[i_1p] # edge_values[i_1p]
+                                keys_p,
+                                keys_q,
+                                value_p,
+                                value_q,
+                                edge_indices[i_1],
+                                edge_indices[i_1p],
+                                edge_values[i_1],
+                                edge_values[i_1p],
+                                extensive_margin,
                             )
 
-                            if (m_xi > 0) and (M_xi == 0 or (M_xi > 0 and i_1 < i_1p)):
-                                xis[i_current_polyad] = np.array([[primary_indices[i_1], primary_indices[i_1p]]] + [[keys_p[l], keys_q[l]] for l in range(D-1)]) # D  x 2
+                            if extensive_margin:
+                                active = (m_xi > 0) and (M_xi == 0)
+                            else:
+                                active = (m_xi > 0) and (M_xi == 0 or (M_xi > 0 and i_1 < i_1p))
+                            if active:
+                                xis[i_current_polyad] = np.array([[primary_indices[i_1], primary_indices[i_1p]]] + [[keys_p[l], keys_q[l]] for l in range(D-1)])
                                 Y_xis[i_current_polyad] = Y_xi
                                 m_xis[i_current_polyad] = m_xi
                                 M_xis[i_current_polyad] = M_xi
@@ -164,18 +159,6 @@ def _compute_polyads_permutations(
 ) -> np.ndarray:
     """
     Obtain all permutations (links) for polyads of dimension D.
-
-    Parameters
-    ----------
-    D : int
-        Polyad dimension.
-    xis : np.ndarray
-        Array of polyad indices (shape: [n_polyads, D, 2]).
-
-    Returns
-    -------
-    np.ndarray
-        Array of all polyad permutations (shape: [2**D * n_polyads, 2*D + 1]).
     """
     grid, _ = _generate_polyad_sign_patterns(D)
     num_polyads = xis.shape[0]
@@ -189,3 +172,21 @@ def _compute_polyads_permutations(
                 polyad_permutations[i_perm, D+d] = polyad_index[d][0] + grid[j][d] * (polyad_index[d][1] - polyad_index[d][0])
             i_perm += 1
     return polyad_permutations
+
+
+def _compute_polyad_permutation_groups(D: int, xis: np.ndarray) -> tuple:
+    """
+    Sort polyad permutations into link groups and count within-group pairs.
+    """
+    xi_permutations = _compute_polyads_permutations(D, xis)
+    xi_permutations = xi_permutations[np.lexsort([xi_permutations[:, i] for i in range(D)])]
+    permutation_group_ends = np.append(
+        1 + np.where(
+            np.sum(np.abs(xi_permutations[1:, :D] - xi_permutations[:-1, :D]), axis=1) > 0
+        )[0],
+        xi_permutations.shape[0],
+    )
+    group_sizes = permutation_group_ends[1:] - permutation_group_ends[:-1]
+    n_pairs = (group_sizes * (group_sizes + 1) // 2).sum()
+    n_pairs += permutation_group_ends[0] * (permutation_group_ends[0] + 1) // 2
+    return xi_permutations, permutation_group_ends, n_pairs
